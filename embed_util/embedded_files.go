@@ -1,10 +1,9 @@
 package embed_util
 
 import (
-	"bytes"
-	"compress/gzip"
 	"fmt"
 	"github.com/gofrs/flock"
+	"github.com/klauspost/compress/zstd"
 	"io"
 	"io/fs"
 	"os"
@@ -106,6 +105,12 @@ func (e *EmbeddedFiles) copyEmbeddedFilesToTmp(embedFs fs.FS, fl *fileList) erro
 		m[fle.Name] = fle
 	}
 
+	dec, err := zstd.NewReader(nil)
+	if err != nil {
+		return err
+	}
+	defer dec.Close()
+
 	for _, fle := range fl.Files {
 		resolvedFle := fle
 		for resolvedFle.Mode.Type() == fs.ModeSymlink {
@@ -150,34 +155,43 @@ func (e *EmbeddedFiles) copyEmbeddedFilesToTmp(embedFs fs.FS, fl *fileList) erro
 			continue
 		}
 
-		var data []byte
-
-		if resolvedFle.Compressed {
-			data, err = fs.ReadFile(embedFs, resolvedFle.Name+".gz")
-			if err != nil {
-				return err
-			}
-			gz, err := gzip.NewReader(bytes.NewReader(data))
-			if err != nil {
-				return err
-			}
-			data, err = io.ReadAll(gz)
-			_ = gz.Close()
-			if err != nil {
-				return err
-			}
-		} else {
-			data, err = fs.ReadFile(embedFs, resolvedFle.Name)
-			if err != nil {
-				return err
-			}
-		}
-
-		err = os.WriteFile(path, data, resolvedFle.Mode.Perm())
+		err = e.writeFile(embedFs, dec, resolvedFle, path)
 		if err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+func (e *EmbeddedFiles) writeFile(embedFs fs.FS, dec *zstd.Decoder, fle fileListEntry, path string) error {
+	name := fle.Name
+	if fle.Compressed {
+		name += ".zst"
+	}
+	src, err := embedFs.Open(name)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+
+	var r io.Reader = src
+	if fle.Compressed {
+		err = dec.Reset(src)
+		if err != nil {
+			return err
+		}
+		r = dec
+	}
+
+	dst, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, fle.Mode.Perm())
+	if err != nil {
+		return err
+	}
+	_, err = io.Copy(dst, r)
+	if err != nil {
+		_ = dst.Close()
+		return err
+	}
+	return dst.Close()
 }

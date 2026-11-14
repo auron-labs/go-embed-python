@@ -1,8 +1,6 @@
 package embed_util
 
 import (
-	"bytes"
-	"compress/gzip"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -12,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/klauspost/compress/zstd"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
 )
@@ -92,6 +91,13 @@ func copyFiles(out string, dir string, fl *fileList) error {
 	var g errgroup.Group
 	g.SetLimit(8)
 
+	// EncodeAll is safe for concurrent use
+	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedBestCompression))
+	if err != nil {
+		return err
+	}
+	defer enc.Close()
+
 	for _, fle := range fl.Files {
 		fle := fle
 		path := filepath.Join(dir, fle.Name)
@@ -118,23 +124,8 @@ func copyFiles(out string, dir string, fl *fileList) error {
 			}
 
 			if fle.Compressed {
-				b := bytes.NewBuffer(make([]byte, 0, len(data)))
-				gz, err := gzip.NewWriterLevel(b, gzip.BestCompression)
-				if err != nil {
-					return err
-				}
-				_, err = gz.Write(data)
-				if err != nil {
-					_ = gz.Close()
-					return err
-				}
-				err = gz.Flush()
-				_ = gz.Close()
-				if err != nil {
-					return err
-				}
-				data = b.Bytes()
-				outPath += ".gz"
+				data = enc.EncodeAll(data, make([]byte, 0, len(data)/2))
+				outPath += ".zst"
 			}
 
 			err = os.WriteFile(outPath, data, 0o644)
@@ -144,7 +135,7 @@ func copyFiles(out string, dir string, fl *fileList) error {
 			return nil
 		})
 	}
-	err := g.Wait()
+	err = g.Wait()
 	if err != nil {
 		return err
 	}
