@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 )
 
+const extractedMarker = ".extracted"
+
 type EmbeddedFiles struct {
 	tmpDir        string
 	extractedPath string
@@ -69,6 +71,18 @@ func (e *EmbeddedFiles) extract(embedFs fs.FS, withHashInDir bool) error {
 	}
 	defer lock.Close()
 
+	markerPath := filepath.Join(e.extractedPath, extractedMarker)
+	marker, err := os.ReadFile(markerPath)
+	if err == nil && string(marker) == flHash {
+		return nil
+	}
+
+	// No or stale marker: start from scratch so that changed, partially written
+	// and no longer existing files can't survive from earlier extractions.
+	err = os.RemoveAll(e.extractedPath)
+	if err != nil {
+		return err
+	}
 	err = os.MkdirAll(e.extractedPath, 0o755)
 	if err != nil {
 		return err
@@ -79,7 +93,8 @@ func (e *EmbeddedFiles) extract(embedFs fs.FS, withHashInDir bool) error {
 		return err
 	}
 
-	return nil
+	// written last, so its presence means that the extraction completed
+	return os.WriteFile(markerPath, []byte(flHash), 0o644)
 }
 
 func (e *EmbeddedFiles) readOrBuildFileList(embedFs fs.FS) (*fileList, error) {
@@ -129,21 +144,6 @@ func (e *EmbeddedFiles) copyEmbeddedFilesToTmp(embedFs fs.FS, fl *fileList) erro
 		}
 
 		path := filepath.Join(e.extractedPath, fle.Name)
-		existingSt, err := os.Lstat(path)
-		if err == nil {
-			if resolvedFle.Mode.Type() == existingSt.Mode().Type() {
-				if resolvedFle.Mode.IsDir() {
-					continue
-				} else if existingSt.Size() == resolvedFle.Size {
-					// unchanged
-					continue
-				}
-			}
-			err = os.RemoveAll(path)
-			if err != nil {
-				return err
-			}
-		}
 
 		if fle.Mode.IsDir() {
 			err := os.MkdirAll(path, resolvedFle.Mode.Perm())
