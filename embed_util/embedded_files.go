@@ -15,6 +15,8 @@ const extractedMarker = ".extracted"
 type EmbeddedFiles struct {
 	tmpDir        string
 	extractedPath string
+	// shared lock held while the extracted files are in use
+	lock *flock.Flock
 }
 
 func NewEmbeddedFiles(embedFs fs.FS, name string) (*EmbeddedFiles, error) {
@@ -33,13 +35,30 @@ func NewEmbeddedFilesWithTmpDir(embedFs fs.FS, tmpDir string, withHashInDir bool
 	return e, nil
 }
 
+// Cleanup removes the extracted files unless other users (processes or other EmbeddedFiles instances) still hold them.
 func (e *EmbeddedFiles) Cleanup() error {
-	if e.extractedPath == "" {
+	if e.lock == nil {
 		return nil
 	}
-	err := os.RemoveAll(e.extractedPath)
+	lock := e.lock
+	extractedPath := e.extractedPath
+	e.lock = nil
 	e.extractedPath = ""
-	return err
+
+	err := lock.Unlock()
+	if err != nil {
+		return err
+	}
+	locked, err := lock.TryLock()
+	if err != nil {
+		return err
+	}
+	if !locked {
+		return nil
+	}
+	defer lock.Close()
+
+	return os.RemoveAll(extractedPath)
 }
 
 func (e *EmbeddedFiles) GetExtractedPath() string {
@@ -65,21 +84,60 @@ func (e *EmbeddedFiles) extract(embedFs fs.FS, withHashInDir bool) error {
 	}
 
 	lock := flock.New(e.extractedPath + ".lock")
+
+	// Fast path: already extracted, only need to register as a user. An exclusive lock
+	// would needlessly wait for every other user of the same extraction.
+	err = lock.RLock()
+	if err != nil {
+		return err
+	}
+	if e.isExtracted(flHash) {
+		e.lock = lock
+		return nil
+	}
+	err = lock.Unlock()
+	if err != nil {
+		return err
+	}
+
 	err = lock.Lock()
 	if err != nil {
 		return err
 	}
-	defer lock.Close()
 
-	markerPath := filepath.Join(e.extractedPath, extractedMarker)
-	marker, err := os.ReadFile(markerPath)
-	if err == nil && string(marker) == flHash {
+	err = e.extractLocked(embedFs, fl, flHash)
+	if err != nil {
+		_ = lock.Unlock()
+		return err
+	}
+
+	// Keep holding the files for our lifetime. In no-hash mode, a process that needs to re-extract
+	// different content blocks until all users are gone, as replacing files would break running interpreters.
+	err = lock.Unlock()
+	if err != nil {
+		return err
+	}
+	err = lock.RLock()
+	if err != nil {
+		return err
+	}
+	e.lock = lock
+	return nil
+}
+
+func (e *EmbeddedFiles) isExtracted(flHash string) bool {
+	marker, err := os.ReadFile(filepath.Join(e.extractedPath, extractedMarker))
+	return err == nil && string(marker) == flHash
+}
+
+func (e *EmbeddedFiles) extractLocked(embedFs fs.FS, fl *fileList, flHash string) error {
+	if e.isExtracted(flHash) {
 		return nil
 	}
 
 	// No or stale marker: start from scratch so that changed, partially written
 	// and no longer existing files can't survive from earlier extractions.
-	err = os.RemoveAll(e.extractedPath)
+	err := os.RemoveAll(e.extractedPath)
 	if err != nil {
 		return err
 	}
@@ -94,7 +152,7 @@ func (e *EmbeddedFiles) extract(embedFs fs.FS, withHashInDir bool) error {
 	}
 
 	// written last, so its presence means that the extraction completed
-	return os.WriteFile(markerPath, []byte(flHash), 0o644)
+	return os.WriteFile(filepath.Join(e.extractedPath, extractedMarker), []byte(flHash), 0o644)
 }
 
 func (e *EmbeddedFiles) readOrBuildFileList(embedFs fs.FS) (*fileList, error) {
