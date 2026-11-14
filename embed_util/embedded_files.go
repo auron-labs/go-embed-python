@@ -4,11 +4,16 @@ import (
 	"fmt"
 	"github.com/gofrs/flock"
 	"github.com/klauspost/compress/zstd"
+	log "github.com/sirupsen/logrus"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 )
+
+var staleHashRegex = regexp.MustCompile("^[0-9a-f]{16}$")
 
 const extractedMarker = ".extracted"
 
@@ -93,7 +98,7 @@ func (e *EmbeddedFiles) extract(embedFs fs.FS, withHashInDir bool) error {
 	}
 	if e.isExtracted(flHash) {
 		e.lock = lock
-		return nil
+		return e.afterExtract(withHashInDir)
 	}
 	err = lock.Unlock()
 	if err != nil {
@@ -122,12 +127,58 @@ func (e *EmbeddedFiles) extract(embedFs fs.FS, withHashInDir bool) error {
 		return err
 	}
 	e.lock = lock
+	return e.afterExtract(withHashInDir)
+}
+
+func (e *EmbeddedFiles) afterExtract(withHashInDir bool) error {
+	if withHashInDir {
+		e.removeStaleExtractions()
+	}
 	return nil
 }
 
 func (e *EmbeddedFiles) isExtracted(flHash string) bool {
 	marker, err := os.ReadFile(filepath.Join(e.extractedPath, extractedMarker))
 	return err == nil && string(marker) == flHash
+}
+
+// removeStaleExtractions removes "<tmpDir>-<hash>" extractions (and their lock files) left over from other
+// versions, unless another user still holds them. Failures are ignored as this is best-effort housekeeping.
+func (e *EmbeddedFiles) removeStaleExtractions() {
+	entries, err := os.ReadDir(filepath.Dir(e.tmpDir))
+	if err != nil {
+		log.Debugf("failed to list stale extractions: %v", err)
+		return
+	}
+
+	prefix := filepath.Base(e.tmpDir) + "-"
+	stale := map[string]struct{}{}
+	for _, de := range entries {
+		name := strings.TrimSuffix(de.Name(), ".lock")
+		if !strings.HasPrefix(name, prefix) || !staleHashRegex.MatchString(name[len(prefix):]) {
+			continue
+		}
+		path := filepath.Join(filepath.Dir(e.tmpDir), name)
+		if path != e.extractedPath {
+			stale[path] = struct{}{}
+		}
+	}
+
+	for path := range stale {
+		lock := flock.New(path + ".lock")
+		locked, err := lock.TryLock()
+		if err != nil || !locked {
+			continue
+		}
+		err = os.RemoveAll(path)
+		if err != nil {
+			log.Debugf("failed to remove stale extraction %s: %v", path, err)
+		} else {
+			// removed while still locked so that no one can lock a file that is about to disappear
+			_ = os.Remove(lock.Path())
+		}
+		_ = lock.Unlock()
+	}
 }
 
 func (e *EmbeddedFiles) extractLocked(embedFs fs.FS, fl *fileList, flHash string) error {
