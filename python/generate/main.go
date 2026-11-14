@@ -41,7 +41,32 @@ var removeLibs = []string{
 	"site-packages",
 	"test",
 	"turtledemo",
+	"tkinter",
+	"lib-dynload/_tkinter*",
+	"lib-dynload/_test*",
+	"lib-dynload/_ctypes_test*",
 	"bin", // not really a library, but erroneously installed by jsonpath_ng
+}
+
+// removeInstallGlobs are globs relative to the install dir, applied before CleanupPythonDir.
+// bin/pip* and bin/idle* are broken because pip and idlelib are removed. The python binaries
+// do not load libpython, so the shared library (and the python-config script that refers to it) is dead weight.
+var removeInstallGlobs = map[string][]string{
+	"linux": {
+		"bin/pip*", "bin/idle*", "bin/python3*-config",
+		"lib/libpython3*.so*",
+		"lib/libtcl*", "lib/itcl*", "lib/thread*", "lib/tcl*", "lib/tk*",
+	},
+	"darwin": {
+		"bin/pip*", "bin/idle*", "bin/python3*-config",
+		"lib/libpython3*.dylib",
+		"lib/libtcl*", "lib/itcl*", "lib/thread*", "lib/tcl*", "lib/tk*",
+	},
+	"windows": {
+		"tcl",
+		"DLLs/tcl*.dll", "DLLs/tk*.dll",
+		"DLLs/_tkinter.pyd", "DLLs/_test*.pyd", "DLLs/_ctypes_test.pyd",
+	},
 }
 
 var keepNixPatterns = []glob.Glob{
@@ -140,7 +165,10 @@ func downloadAndPrepare(osName string, arch string, dist string, ext string, kee
 	}
 
 	for _, lib := range removeLibs {
-		_ = os.RemoveAll(filepath.Join(libPath, lib))
+		removeGlob(filepath.Join(libPath, lib))
+	}
+	for _, g := range removeInstallGlobs[osName] {
+		removeGlob(filepath.Join(installPath, g))
 	}
 
 	err = internal.CleanupPythonDir(installPath, keepPatterns)
@@ -153,6 +181,16 @@ func downloadAndPrepare(osName string, arch string, dist string, ext string, kee
 		if err != nil {
 			panic(err)
 		}
+	}
+}
+
+func removeGlob(pattern string) {
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		log.Panic(err)
+	}
+	for _, m := range matches {
+		_ = os.RemoveAll(m)
 	}
 }
 
