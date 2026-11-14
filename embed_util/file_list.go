@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
-	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -66,7 +65,7 @@ func buildFileListFromDir(dir string) (*fileList, error) {
 		} else if info.Mode().IsDir() {
 			fle.Size = 0
 		} else if info.Mode().IsRegular() {
-			fle.Compressed = shouldCompress(path)
+			fle.Compressed = true
 		}
 
 		fl.Files = append(fl.Files, fle)
@@ -119,23 +118,6 @@ func buildFileListFromFs(embedFs fs.FS) (*fileList, error) {
 		return fl.Files[i].Name < fl.Files[j].Name
 	})
 	return &fl, nil
-}
-
-func shouldCompress(path string) bool {
-	f, err := os.Open(path)
-	if err != nil {
-		return false
-	}
-	defer f.Close()
-	data := make([]byte, 512)
-	n, err := f.Read(data)
-	if err != nil {
-		return false
-	}
-	if http.DetectContentType(data[:n]) == "application/octet-stream" {
-		return true
-	}
-	return false
 }
 
 func (fl *fileList) toMap() map[string]fileListEntry {
