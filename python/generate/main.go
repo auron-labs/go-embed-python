@@ -210,27 +210,47 @@ func download(osName string, arch string, dist string, ext string) string {
 	}
 	log.Infof("downloading %s", downloadUrl)
 
-	r, err := http.Get(downloadUrl)
+	err = downloadFile(downloadUrl, downloadPath)
 	if err != nil {
 		log.Errorf("download failed: %v", err)
 		os.Exit(1)
 	}
-	if r.StatusCode == http.StatusNotFound {
-		log.Errorf("404 not found")
-		os.Exit(1)
-	}
-	defer r.Body.Close()
-
-	fileData, err := io.ReadAll(r.Body)
-
-	err = os.WriteFile(downloadPath, fileData, 0o640)
-	if err != nil {
-		log.Errorf("writing file failed: %v", err)
-		os.Remove(downloadPath)
-		os.Exit(1)
-	}
 
 	return downloadPath
+}
+
+// downloadFile streams url into a temp file next to dst and renames it on success,
+// so a failed download never leaves a partial file that would be treated as cached.
+func downloadFile(url string, dst string) error {
+	r, err := http.Get(url)
+	if err != nil {
+		return err
+	}
+	defer r.Body.Close()
+	if r.StatusCode < 200 || r.StatusCode > 299 {
+		return fmt.Errorf("unexpected status: %s", r.Status)
+	}
+
+	f, err := os.CreateTemp(filepath.Dir(dst), filepath.Base(dst)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+
+	_, err = io.Copy(f, r.Body)
+	if err != nil {
+		_ = f.Close()
+		return err
+	}
+	err = f.Close()
+	if err != nil {
+		return err
+	}
+	err = os.Chmod(f.Name(), 0o640)
+	if err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), dst)
 }
 
 func extract(archivePath string, targetPath string, ext string) (string, error) {

@@ -20,6 +20,9 @@ var DefaultPythonRemovePatterns = []glob.Glob{
 func CleanupPythonDir(dir string, keepPatterns []glob.Glob) error {
 	var removes []string
 	err := filepath.Walk(dir, func(path string, info fs.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
 		relPath, err := filepath.Rel(dir, path)
 		if err != nil {
 			return err
@@ -43,6 +46,9 @@ func CleanupPythonDir(dir string, keepPatterns []glob.Glob) error {
 		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
 
 	for _, r := range removes {
 		err = os.RemoveAll(r)
@@ -51,12 +57,7 @@ func CleanupPythonDir(dir string, keepPatterns []glob.Glob) error {
 		}
 	}
 
-	err = removeEmptyDirs(dir)
-	if err != nil {
-		return err
-	}
-
-	return err
+	return removeEmptyDirs(dir)
 }
 
 func removeEmptyDirs(dir string) error {
@@ -75,6 +76,9 @@ func removeEmptyDirs(dir string) error {
 func removeEmptyDirs2(dir string) (bool, error) {
 	var removes []string
 	err := filepath.Walk(dir, func(path string, info fs.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
 		if info.IsDir() {
 			des, err := os.ReadDir(path)
 			if err != nil {

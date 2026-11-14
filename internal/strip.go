@@ -13,6 +13,9 @@ func StripBinaries(path string, arch string) error {
 	var binFiles []string
 
 	err := filepath.Walk(path, func(p string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
 		relPath, err := filepath.Rel(path, p)
 		if err != nil {
 			return err

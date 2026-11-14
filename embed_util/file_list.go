@@ -38,6 +38,9 @@ func buildFileListFromDir(dir string) (*fileList, error) {
 	var fl fileList
 
 	err := filepath.Walk(dir, func(path string, info fs.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
 		relPath, err := filepath.Rel(dir, path)
 		if err != nil {
 			return err
@@ -82,6 +85,9 @@ func buildFileListFromFs(embedFs fs.FS) (*fileList, error) {
 	var fl fileList
 
 	err := fs.WalkDir(embedFs, ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
 		if path == "." || path == "files.json" {
 			return nil
 		}
