@@ -38,6 +38,6 @@ echo "checking out temporary branch"
 git checkout --detach
 git add -f python/internal/data
 git add -f pip/internal/data
-git commit --no-verify -m "added python $PYTHON_VERSION from python-standalone $PYTHON_STANDALONE_VERSION"
+git commit -m "chore(release): add python $PYTHON_VERSION from python-build-standalone $PYTHON_STANDALONE_VERSION"
 git tag -f "$TAG"
 git checkout -
