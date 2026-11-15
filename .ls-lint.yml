@@ -1,0 +1,7 @@
+ls:
+  .go: snake_case
+
+ignore:
+  - .git
+  - python/internal/data
+  - pip/internal/data

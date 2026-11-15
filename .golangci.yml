@@ -1,0 +1,63 @@
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - asasalint
+    - bidichk
+    - bodyclose
+    - canonicalheader
+    - containedctx
+    - contextcheck
+    - copyloopvar
+    - durationcheck
+    - errname
+    - errorlint
+    - exhaustive
+    - fatcontext
+    - gocheckcompilerdirectives
+    - gochecknoinits
+    - gocritic
+    - godot
+    - goprintffuncname
+    - gosec
+    - intrange
+    - makezero
+    - misspell
+    - musttag
+    - nakedret
+    - nilerr
+    - nilnil
+    - noctx
+    - nolintlint
+    - perfsprint
+    - prealloc
+    - predeclared
+    - revive
+    - sloglint
+    - testifylint
+    - unconvert
+    - unparam
+    - usestdlibvars
+    - usetesting
+    - wastedassign
+    - whitespace
+    - wrapcheck
+
+  exclusions:
+    rules:
+      # Tests write fixtures with ordinary file modes and use math/rand for deterministic or unique names.
+      - path: _test\.go
+        linters:
+          - gosec
+        text: "G(301|304|306|404)"
+      # PythonOpt is exported API; renaming it to Opt would break consumers.
+      - path: python/python\.go
+        linters:
+          - revive
+        text: "type name will be used as python\\.PythonOpt"
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports

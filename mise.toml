@@ -1,0 +1,40 @@
+[tools]
+betterleaks = "1.10.1"
+go = "1.26.11"
+golangci-lint = "2.15.0"
+hk = "2.12.0"
+ls-lint = "2.3.2"
+pinact = "5.0.2"
+pkl = "0.33.0"
+shellcheck = "0.11.0"
+shfmt = "3.14.1"
+tombi = "1.11.2"
+zizmor = "1.32.0"
+
+[env]
+BETTERLEAKS_CONFIG = "{{ config_root }}/.betterleaks.toml"
+
+[tasks.setup]
+description = "Install dependencies and Git hooks"
+depends = ["install"]
+run = "hk install --mise"
+
+[tasks.install]
+description = "Download Go module dependencies"
+run = "go mod download"
+
+[tasks.build]
+description = "Build all packages (requires generated data)"
+run = "go build ./..."
+
+[tasks.test]
+description = "Run the test suite (requires generated data)"
+run = "go test ./..."
+
+[tasks.check]
+description = "Run every lint and format check"
+run = "hk check --all"
+
+[tasks.fix]
+description = "Apply automatic lint and format fixes"
+run = "hk fix --all"

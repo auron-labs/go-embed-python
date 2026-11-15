@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+#MISE description="Generate the embedded python and pip distributions"
+#USAGE arg "<python_version>" help="CPython version, e.g. 3.14.6"
+#USAGE arg "<python_standalone_version>" help="python-build-standalone release, e.g. 20260610"
+set -euo pipefail
+
+go run ./python/generate --python-version="${usage_python_version:?}" --python-standalone-version="${usage_python_standalone_version:?}"
+go run ./pip/generate
