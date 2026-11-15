@@ -4,7 +4,7 @@ package main
 import (
 	"os"
 
-	"github.com/kluctl/go-embed-python/python"
+	"github.com/auron-labs/go-embed-python/python"
 )
 
 func main() {

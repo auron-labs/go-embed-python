@@ -9,8 +9,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/kluctl/go-embed-python/pip"
-	"github.com/kluctl/go-embed-python/python"
+	"github.com/auron-labs/go-embed-python/pip"
+	"github.com/auron-labs/go-embed-python/python"
 )
 
 func main() {

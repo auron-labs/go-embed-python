@@ -8,7 +8,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/kluctl/go-embed-python/embed_util"
+	"github.com/auron-labs/go-embed-python/embed_util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/kluctl/go-embed-python/embed_util"
-	"github.com/kluctl/go-embed-python/internal"
-	"github.com/kluctl/go-embed-python/python"
+	"github.com/auron-labs/go-embed-python/embed_util"
+	"github.com/auron-labs/go-embed-python/internal"
+	"github.com/auron-labs/go-embed-python/python"
 )
 
 // CreateEmbeddedPipPackagesForKnownPlatforms installs the requirements for every supported OS and architecture

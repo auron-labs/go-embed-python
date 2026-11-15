@@ -3,8 +3,8 @@ package python
 import (
 	"fmt"
 
-	"github.com/kluctl/go-embed-python/embed_util"
-	"github.com/kluctl/go-embed-python/python/internal/data"
+	"github.com/auron-labs/go-embed-python/embed_util"
+	"github.com/auron-labs/go-embed-python/python/internal/data"
 )
 
 // EmbeddedPython is a Python backed by an interpreter extracted from the embedded distribution.

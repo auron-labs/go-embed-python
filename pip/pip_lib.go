@@ -3,8 +3,8 @@ package pip
 import (
 	"fmt"
 
-	"github.com/kluctl/go-embed-python/embed_util"
-	"github.com/kluctl/go-embed-python/pip/internal/data"
+	"github.com/auron-labs/go-embed-python/embed_util"
+	"github.com/auron-labs/go-embed-python/pip/internal/data"
 )
 
 // NewPipLib extracts the embedded pip distribution. The name distinguishes the extraction directory from other
