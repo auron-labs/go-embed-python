@@ -1,17 +1,44 @@
-# Embedded Python Interpreter for Go
+# go-embed-python
 
-This library provides an embedded distribution of Python, which should work out-of-the box on a selected set of
-architectures and operating systems.
+[![CI](https://img.shields.io/github/actions/workflow/status/auron-labs/go-embed-python/ci.yml?branch=main&style=flat-square&label=ci)](https://github.com/auron-labs/go-embed-python/actions/workflows/ci.yml)
+[![Go Reference](https://img.shields.io/badge/go-reference-007d9c?style=flat-square&logo=go)](https://pkg.go.dev/github.com/auron-labs/go-embed-python)
+[![License](https://img.shields.io/github/license/auron-labs/go-embed-python?style=flat-square)](LICENSE)
 
-This library does not require CGO and solely relies on executing Python inside another process. It does not rely
-on CPython binding to work. There is also no need to have Python pre-installed on the target host.
+Embed a complete Python interpreter in your Go binary and run it without CGO and without Python installed on the target host.
 
-You really only have to depend on this library and invoke it as follows:
+The library ships the [python-build-standalone](https://github.com/astral-sh/python-build-standalone) distributions via `//go:embed`, extracts the one for the current platform to a temporary directory on first use, and runs Python as a child process.
+
+## Upstream
+
+This repository is a fork of [kluctl/go-embed-python](https://github.com/kluctl/go-embed-python), created by Alexander Block and its contributors, and licensed under the [Apache License 2.0](LICENSE). The original work remains under that license and copyright. Changes made in this fork are recorded in its Git history and are also distributed under the Apache License 2.0.
+
+## Features
+
+- No CGO and no dynamic linking against Python: the interpreter runs in a separate process.
+- Supported platforms: `linux-amd64`, `linux-arm64`, `darwin-amd64`, `darwin-arm64`, `windows-amd64`.
+- Extraction happens once per version and is verified with a completion marker; later starts reuse it.
+- Processes sharing an extraction don't remove it from under each other, and extractions of older versions are cleaned up automatically.
+- Helpers to embed pip packages for every supported platform alongside the interpreter.
+
+## Installation
+
+Each release tag contains the embedded Python distribution. Pick the tag for the Python version you want from the [tags list](https://github.com/auron-labs/go-embed-python/tags):
+
+```sh
+go get github.com/auron-labs/go-embed-python@v0.0.0-3.14.6-20260610-1
+```
+
+The `main` branch contains no embedded distribution and cannot run Python; always depend on a release tag.
+
+## Quick start
 
 ```go
+package main
+
 import (
-	"github.com/kluctl/go-embed-python/python"
 	"os"
+
+	"github.com/auron-labs/go-embed-python/python"
 )
 
 func main() {
@@ -26,6 +53,7 @@ func main() {
 	}
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+
 	err = cmd.Run()
 	if err != nil {
 		panic(err)
@@ -33,55 +61,27 @@ func main() {
 }
 ```
 
-## Supported architectures
-The following operating systems and architectures are supported:
-* darwin-amd64
-* darwin-arm64
-* linux-amd64
-* linux-arm64
-* windows-amd64
+`NewEmbeddedPython(name)` extracts the distribution to `<os.TempDir()>/go-embedded-python-<name>-<hash>`. Choose a `name` that won't collide with other applications using this library. `PythonCmd` returns an `*exec.Cmd` with `PYTHONHOME` (and `PYTHONPATH`, if set via `AddPythonPath`) configured.
 
-## Releases
-Releases in this library are handled a bit different from what one might be used to. This library does currently not
-follow a versioning schema comparable to sematic versioning. This might however change in the future.
+To control the extraction directory, use `python.NewEmbeddedPythonWithTmpDir(dir, withHashInDir)`. With `withHashInDir` set to `false`, the same directory is reused across versions. A process that needs a different version waits until every process using the current extraction has exited.
 
-Right now, every tagged release is compromised of the Python interpreter version, the [python-standalone](https://github.com/astral-sh/python-build-standalone)
-and a build number. For example, the release version `v0.0.0-3.11.6-20241219-2` belongs to Python version 3.11.6, 
-the [20241219](https://github.com/astral-sh/python-build-standalone/releases/tag/20241219) version of python-standalone
-and build number 2. The release version currently always has v0.0.0 as its own version.
+`Cleanup()` removes the extracted files unless another process or instance is still using them.
 
-The way versioning is handled might result in popular dependency management tools (e.g. dependabot) to not work as you
-might require it. Please watch out to not accidentally upgrade your Python version!
+## Versioning
 
-## How it works
-This library uses the standalone Python distributions found at https://github.com/astral-sh/python-build-standalone as
-the base.
+Release tags have the form `v0.0.0-<python version>-<python-build-standalone release>-<build number>`. For example, `v0.0.0-3.14.6-20260610-1` is Python 3.14.6 from the [20260610](https://github.com/astral-sh/python-build-standalone/releases/tag/20260610) python-build-standalone release, build 1.
 
-The `./hack/build-tag.sh` script is used to invoke `python/generate` and `pip/generate`, which then downloads, extracts
-and packages all supported Python distributions. The script then also creates a tag which then can be used as a dependency
-in your project.
+Because every tag is `v0.0.0`, dependency update tools such as Dependabot may propose unexpected Python version changes. Review them before merging.
 
-The tagged release internally embed all Python sources and binaries via `//go:embed`. The `EmbeddedPython` object
-is then used as a helper utility to access the embedded distribution.
+## Embedding pip packages
 
-`EmbeddedPython` is created via `NewEmbeddedPython`, which will extract the embedded distribution into a temporary folder.
-Extraction is optimized in a way that it is only executed when needed (by verifying integrity of previously extracted
-distributions).
-
-## Upgrading python
-The Python version and downloaded distributions are controlled via the `.github/workflows/release.yml` workflow. It
-contains a matrix of supported distributions. To upgrade Python, edit this workflow and create a pull request.
-
-## Embedding Python libraries into your applications
-This library provides utilities/helpers to allow embedding of external libraries into your own application.
-
-To do this, create a simple generator application inside your application/library, for example in `internal/my-python-libs/generate/main.go`:
+Create a generator in your module, for example `internal/my-python-libs/generate/main.go`:
 
 ```go
 package main
 
 import (
-	"github.com/kluctl/go-embed-python/pip"
+	"github.com/auron-labs/go-embed-python/pip"
 )
 
 func main() {
@@ -92,37 +92,45 @@ func main() {
 }
 ```
 
-Then create add the `//go:generate go run ./generate` statement to a .go file above the generator source, e.g. in `internal/my-python-libs/dummy.go`:
-```
+Reference it from a Go file in the parent directory, e.g. `internal/my-python-libs/dummy.go`:
+
+```go
 package internal
 
 //go:generate go run ./generate
 ```
 
-And the requirements.txt in `internal/my-python-libs/requirements.txt`:
-```
+Add `internal/my-python-libs/requirements.txt`:
+
+```text
 jinja2==3.1.2
 ```
 
-When running `go generate ./...` inside your application/library, you'll get the referenced Python libraries installed
-to `internal/my-python-libs/data`. The embedded data is then available via `data.Data` and can be passed to
-`embed_util.NewEmbeddedFiles()` for extraction.
+`go generate ./...` installs the packages for every supported platform into `internal/my-python-libs/data`. Pass the generated `data.Data` to `embed_util.NewEmbeddedFiles()` to extract it, then add `EmbeddedFiles.GetExtractedPath()` to the interpreter with `ep.AddPythonPath(...)`.
 
-The path returned by `EmbeddedFiles.GetExtractedPath()` can then be added to the `EmbeddedPython` by calling
-`AddPythonPath` on it.
+[kluctl/go-jinja2](https://github.com/kluctl/go-jinja2) is a complete example of this pattern.
 
-An example of all this can be found in https://github.com/kluctl/go-jinja2
+## Development
 
-# Why another go+python solution?
-There are already multiple implementations of go-bindings for Python, which however all rely on CGO and/or dynamic
-linking. I experimented a lot with these and was not able to make it stable enough so that I could use it without fear
-of the process crashing after some time. I even got to the point where I implemented my own dynamic library loader that
-was not depending on CGO, but ultimately gave up when I realized that it would not work on all platforms.
+Tool versions and tasks are managed with [mise](https://mise.jdx.dev/):
 
-The only solution that was left was to spawn a Python process and use some kind of inter-process communication. For this
-to work reliably, without any dependencies on the host system, it was required to embed a fully working Python
-distribution into my Go binaries. I managed to make this flexible enough to put into a library so that others might
-benefit as well.
+```sh
+mise run setup      # download Go modules and install Git hooks
+mise run check      # run all linters and format checks
+mise run fix        # apply automatic fixes
+```
 
-Initially, this approach/code was part of https://github.com/kluctl/kluctl to allow Jinja2 templates in Go. The Jinja2
-part can now be found in https://github.com/kluctl/go-jinja2.
+The `python` and `pip` packages need the embedded data, which only exists on release tags. To generate it locally (requires Docker for stripping Linux binaries):
+
+```sh
+mise run generate 3.14.6 20260610
+mise run test
+```
+
+Generation deletes the placeholder `python/internal/data/dummy.go`; restore it with `git checkout python/internal/data` before committing.
+
+The Python versions that get released are listed in [`.github/workflows/release.yml`](.github/workflows/release.yml). Pushing to `main` builds, tests and tags a release for every entry.
+
+## License
+
+[Apache License 2.0](LICENSE).
