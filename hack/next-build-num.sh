@@ -1,7 +1,9 @@
+#!/bin/sh
+
 set -e
 
-DIR=$(cd $(dirname $0) && pwd)
-cd $DIR/..
+DIR=$(cd "$(dirname "$0")" && pwd)
+cd "$DIR"/..
 
 PYTHON_STANDALONE_VERSION=$1
 PYTHON_VERSION=$2
@@ -25,10 +27,10 @@ BUILD_NUM=1
 
 while true; do
   TAG=v0.0.0-$PYTHON_VERSION-$PYTHON_STANDALONE_VERSION-$BUILD_NUM
-  if [ "$(echo $REMOTE_TAGS | grep "refs/tags/$TAG")" != "" -o "$(echo $LOCAL_TAGS | grep "$TAG")" != "" ] ; then
-      BUILD_NUM=$(($BUILD_NUM+1))
+  if echo "$REMOTE_TAGS" | grep -q "refs/tags/$TAG" || echo "$LOCAL_TAGS" | grep -q "$TAG"; then
+    BUILD_NUM=$((BUILD_NUM + 1))
   else
-      break
+    break
   fi
 done
 

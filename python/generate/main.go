@@ -1,7 +1,9 @@
+// Command generate downloads python-build-standalone distributions and packs them into the embedded data package.
 package main
 
 import (
 	"compress/gzip"
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -75,6 +77,7 @@ var keepNixPatterns = []glob.Glob{
 	glob.MustCompile("lib/*.dylib"),
 	glob.MustCompile("lib/python3.*/**"),
 }
+
 var keepWinPatterns = []glob.Glob{
 	glob.MustCompile("Lib/**"),
 	glob.MustCompile("DLLs/**"),
@@ -117,7 +120,6 @@ func main() {
 		{"windows", "amd64", "pc-windows-msvc-pgo-full", "tar.zst", keepWinPatterns, false},
 	}
 	for _, j := range jobs {
-		j := j
 		wg.Add(1)
 		go func() {
 			if *runPrepare {
@@ -130,6 +132,14 @@ func main() {
 		}()
 	}
 	wg.Wait()
+
+	if *runPack {
+		// the placeholder declares an empty Data, which would conflict with the generated embed files
+		err := os.Remove(filepath.Join(targetPath, "dummy.go"))
+		if err != nil && !os.IsNotExist(err) {
+			log.Fatal(err)
+		}
+	}
 }
 
 func calcInstallPath(extractPath string, dist string) string {
@@ -141,10 +151,14 @@ func calcInstallPath(extractPath string, dist string) string {
 }
 
 func downloadAndPrepare(osName string, arch string, dist string, ext string, keepPatterns []glob.Glob, strip bool) {
-	downloadPath := download(osName, arch, dist, ext)
+	downloadPath, err := download(arch, dist, ext)
+	if err != nil {
+		log.Errorf("download failed: %v", err)
+		os.Exit(1)
+	}
 
 	extractPath := downloadPath + ".extracted"
-	err := os.RemoveAll(extractPath)
+	err = os.RemoveAll(extractPath)
 	if err != nil {
 		log.Panic(err)
 	}
@@ -161,7 +175,7 @@ func downloadAndPrepare(osName string, arch string, dist string, ext string, kee
 	if osName == "windows" {
 		libPath = filepath.Join(installPath, "Lib")
 	} else {
-		libPath = filepath.Join(installPath, "lib", fmt.Sprintf("python%s", pythonVersionBase))
+		libPath = filepath.Join(installPath, "lib", "python"+pythonVersionBase)
 	}
 
 	for _, lib := range removeLibs {
@@ -177,7 +191,7 @@ func downloadAndPrepare(osName string, arch string, dist string, ext string, kee
 	}
 
 	if strip {
-		err = internal.StripBinaries(installPath, arch)
+		err = internal.StripBinaries(installPath)
 		if err != nil {
 			panic(err)
 		}
@@ -207,12 +221,16 @@ func packPrepared(osName string, arch string, dist string, ext string, targetPat
 		panic(err)
 	}
 
-	f, err := os.Create(filepath.Join(targetPath, "PYTHON_VERSION"))
+	f, err := os.Create(filepath.Join(targetPath, "PYTHON_VERSION")) //nolint:gosec // path is derived from the generator target
 	if err != nil {
 		panic(err)
 	}
-	defer f.Close()
 	_, err = fmt.Fprintf(f, "PYTHON_VERSION=%q\nPYTHON_STANDALONE_VERSION=%q\n", *pythonVersion, *pythonStandaloneVersion)
+	if err != nil {
+		_ = f.Close()
+		panic(err)
+	}
+	err = f.Close()
 	if err != nil {
 		panic(err)
 	}
@@ -228,100 +246,106 @@ func generateDownloadPath(arch string, dist string, ext string) string {
 	return filepath.Join(*preparePath, fname)
 }
 
-func download(osName string, arch string, dist string, ext string) string {
+func download(arch string, dist string, ext string) (string, error) {
 	downloadLock.Lock()
 	defer downloadLock.Unlock()
 
 	downloadPath := generateDownloadPath(arch, dist, ext)
 	fname := filepath.Base(downloadPath)
-	downloadUrl := fmt.Sprintf("https://github.com/astral-sh/python-build-standalone/releases/download/%s/%s", *pythonStandaloneVersion, fname)
+	downloadURL := fmt.Sprintf("https://github.com/astral-sh/python-build-standalone/releases/download/%s/%s", *pythonStandaloneVersion, fname)
 
 	if _, err := os.Stat(downloadPath); err == nil {
-		log.Infof("skipping download of %s", downloadUrl)
-		return downloadPath
+		log.Infof("skipping download of %s", downloadURL)
+		return downloadPath, nil
 	}
 
-	err := os.MkdirAll(filepath.Dir(downloadPath), 0o755)
+	err := os.MkdirAll(filepath.Dir(downloadPath), 0o755) //nolint:gosec // cache dir for downloads
 	if err != nil {
-		log.Errorf("mkdirs failed: %v", err)
-		os.Exit(1)
+		return "", fmt.Errorf("mkdirs failed: %w", err)
 	}
-	log.Infof("downloading %s", downloadUrl)
+	log.Infof("downloading %s", downloadURL)
 
-	err = downloadFile(downloadUrl, downloadPath)
+	err = downloadFile(downloadURL, downloadPath)
 	if err != nil {
-		log.Errorf("download failed: %v", err)
-		os.Exit(1)
+		return "", err
 	}
 
-	return downloadPath
+	return downloadPath, nil
 }
 
 // downloadFile streams url into a temp file next to dst and renames it on success,
 // so a failed download never leaves a partial file that would be treated as cached.
 func downloadFile(url string, dst string) error {
-	r, err := http.Get(url)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, http.NoBody)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create request for %s: %w", url, err)
 	}
-	defer r.Body.Close()
+	r, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("download of %s failed: %w", url, err)
+	}
+	defer func() { _ = r.Body.Close() }()
 	if r.StatusCode < 200 || r.StatusCode > 299 {
-		return fmt.Errorf("unexpected status: %s", r.Status)
+		return fmt.Errorf("download of %s failed: unexpected status: %s", url, r.Status)
 	}
 
 	f, err := os.CreateTemp(filepath.Dir(dst), filepath.Base(dst)+".tmp-*")
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create temp file for %s: %w", dst, err)
 	}
-	defer os.Remove(f.Name())
+	defer func() { _ = os.Remove(f.Name()) }()
 
 	_, err = io.Copy(f, r.Body)
 	if err != nil {
 		_ = f.Close()
-		return err
+		return fmt.Errorf("failed to write %s: %w", f.Name(), err)
 	}
 	err = f.Close()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to close %s: %w", f.Name(), err)
 	}
-	err = os.Chmod(f.Name(), 0o640)
+	err = os.Chmod(f.Name(), 0o640) //nolint:gosec // downloaded archives are group-readable
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to chmod %s: %w", f.Name(), err)
 	}
-	return os.Rename(f.Name(), dst)
+	err = os.Rename(f.Name(), dst)
+	if err != nil {
+		return fmt.Errorf("failed to move download to %s: %w", dst, err)
+	}
+	return nil
 }
 
 func extract(archivePath string, targetPath string, ext string) (string, error) {
-	f, err := os.Open(archivePath)
+	f, err := os.Open(archivePath) //nolint:gosec // archive path is derived from the generator flags
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to open %s: %w", archivePath, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var dc io.Reader
-	if ext == "tar.gz" {
+	switch ext {
+	case "tar.gz":
 		gz, err := gzip.NewReader(f)
 		if err != nil {
-			return "", err
+			return "", fmt.Errorf("failed to read gzip stream of %s: %w", archivePath, err)
 		}
-		defer gz.Close()
+		defer func() { _ = gz.Close() }()
 		dc = gz
-	} else if ext == "tar.zst" {
+	case "tar.zst":
 		z, err := zstd.NewReader(f)
 		if err != nil {
-			return "", err
+			return "", fmt.Errorf("failed to read zstd stream of %s: %w", archivePath, err)
 		}
 		defer z.Close()
 		dc = z
-	} else {
+	default:
 		return "", fmt.Errorf("unknown extension: %s", ext)
 	}
 
 	log.Infof("decompressing %s", archivePath)
 	err = internal.ExtractTarStream(dc, targetPath)
 	if err != nil {
-		log.Errorf("decompression failed: %v", err)
-		os.Exit(1)
+		return "", fmt.Errorf("decompression failed: %w", err)
 	}
 
 	return targetPath, nil

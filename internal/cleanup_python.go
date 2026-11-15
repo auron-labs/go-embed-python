@@ -1,12 +1,16 @@
+// Package internal contains helpers for preparing and unpacking python distributions.
 package internal
 
 import (
-	"github.com/gobwas/glob"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+
+	"github.com/gobwas/glob"
 )
 
+// DefaultPythonRemovePatterns matches files and directories that CleanupPythonDir always removes.
 var DefaultPythonRemovePatterns = []glob.Glob{
 	glob.MustCompile("__pycache__"),
 	glob.MustCompile("**/__pycache__"),
@@ -17,6 +21,9 @@ var DefaultPythonRemovePatterns = []glob.Glob{
 	glob.MustCompile("**/*.dist-info"),
 }
 
+// CleanupPythonDir removes caches, debug files, tests and metadata matching DefaultPythonRemovePatterns from dir.
+// If keepPatterns is not empty, all files not matching any of the patterns are removed as well.
+// Directories left empty are removed afterwards.
 func CleanupPythonDir(dir string, keepPatterns []glob.Glob) error {
 	var removes []string
 	err := filepath.Walk(dir, func(path string, info fs.FileInfo, err error) error {
@@ -25,7 +32,7 @@ func CleanupPythonDir(dir string, keepPatterns []glob.Glob) error {
 		}
 		relPath, err := filepath.Rel(dir, path)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to relativize %s: %w", path, err)
 		}
 		for _, p := range DefaultPythonRemovePatterns {
 			if p.Match(relPath) {
@@ -47,13 +54,13 @@ func CleanupPythonDir(dir string, keepPatterns []glob.Glob) error {
 		return nil
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to walk %s: %w", dir, err)
 	}
 
 	for _, r := range removes {
 		err = os.RemoveAll(r)
 		if err != nil && !os.IsNotExist(err) {
-			return err
+			return fmt.Errorf("failed to remove %s: %w", r, err)
 		}
 	}
 
@@ -61,7 +68,7 @@ func CleanupPythonDir(dir string, keepPatterns []glob.Glob) error {
 }
 
 func removeEmptyDirs(dir string) error {
-	for true {
+	for {
 		didRemove, err := removeEmptyDirs2(dir)
 		if err != nil {
 			return err
@@ -82,7 +89,7 @@ func removeEmptyDirs2(dir string) (bool, error) {
 		if info.IsDir() {
 			des, err := os.ReadDir(path)
 			if err != nil {
-				return err
+				return fmt.Errorf("failed to read dir %s: %w", path, err)
 			}
 			if len(des) == 0 {
 				removes = append(removes, path)
@@ -91,13 +98,13 @@ func removeEmptyDirs2(dir string) (bool, error) {
 		return nil
 	})
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("failed to walk %s: %w", dir, err)
 	}
 
 	for _, r := range removes {
 		err = os.Remove(r)
 		if err != nil {
-			return false, err
+			return false, fmt.Errorf("failed to remove %s: %w", r, err)
 		}
 	}
 	return len(removes) != 0, nil

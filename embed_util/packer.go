@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,8 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// CopyForEmbed copies dir to out in the layout read by EmbeddedFiles: regular files are zstd compressed and
+// a files.json describing the tree is written. The tree is not modified, except for creating missing directories.
 func CopyForEmbed(out string, dir string) error {
 	fl, err := buildFileListFromDir(dir)
 	if err != nil {
@@ -30,6 +33,7 @@ func CopyForEmbed(out string, dir string) error {
 	return doWriteFilesList(dir, out, fl)
 }
 
+// BuildAndWriteFilesList writes files.json for dir in place, without copying or compressing any files.
 func BuildAndWriteFilesList(dir string) error {
 	fl, err := buildFileListFromDir(dir)
 	if err != nil {
@@ -46,16 +50,19 @@ func doWriteFilesList(srcDir string, outDir string, fl *fileList) error {
 	}
 	b, err := json.MarshalIndent(fl, "", "  ")
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to encode file list: %w", err)
 	}
 
-	err = os.WriteFile(filepath.Join(outDir, "files.json"), b, 0o644)
+	listPath := filepath.Join(outDir, "files.json")
+	err = os.WriteFile(listPath, b, 0o644) //nolint:gosec // generated source files are world-readable
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to write %s: %w", listPath, err)
 	}
 	return nil
 }
 
+// WriteEmbedGoFile writes a Go file into targetDir that embeds the files for the given platform. If goOs is empty,
+// everything in targetDir is embedded instead.
 func WriteEmbedGoFile(targetDir string, goOs string, goArch string) error {
 	var embedSrc, fname string
 	if goOs == "" {
@@ -84,7 +91,12 @@ var Data, _ = fs.Sub(_data, "%s-%s")
 		fname = strings.ReplaceAll(fmt.Sprintf("embed_%s_%s.go", goOs, goArch), "-", "_")
 	}
 
-	return os.WriteFile(filepath.Join(targetDir, fname), []byte(embedSrc), 0o644)
+	embedPath := filepath.Join(targetDir, fname)
+	err := os.WriteFile(embedPath, []byte(embedSrc), 0o644) //nolint:gosec // generated source files are world-readable
+	if err != nil {
+		return fmt.Errorf("failed to write %s: %w", embedPath, err)
+	}
+	return nil
 }
 
 func copyFiles(out string, dir string, fl *fileList) error {
@@ -94,23 +106,22 @@ func copyFiles(out string, dir string, fl *fileList) error {
 	// EncodeAll is safe for concurrent use
 	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedBestCompression))
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create zstd encoder: %w", err)
 	}
-	defer enc.Close()
+	defer func() { _ = enc.Close() }()
 
 	for _, fle := range fl.Files {
-		fle := fle
 		path := filepath.Join(dir, fle.Name)
 
 		st, err := os.Lstat(path)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to stat %s: %w", path, err)
 		}
 
 		outPath := filepath.Join(out, fle.Name)
-		err = os.MkdirAll(filepath.Dir(outPath), 0o755)
+		err = os.MkdirAll(filepath.Dir(outPath), 0o755) //nolint:gosec // generated source files are world-readable
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to create %s: %w", filepath.Dir(outPath), err)
 		}
 
 		if !st.Mode().IsRegular() {
@@ -118,9 +129,9 @@ func copyFiles(out string, dir string, fl *fileList) error {
 		}
 
 		g.Go(func() error {
-			data, err := os.ReadFile(path)
+			data, err := os.ReadFile(path) //nolint:gosec // path is built from the file list of the directory being packed
 			if err != nil {
-				return err
+				return fmt.Errorf("failed to read %s: %w", path, err)
 			}
 
 			if fle.Compressed {
@@ -128,25 +139,32 @@ func copyFiles(out string, dir string, fl *fileList) error {
 				outPath += ".zst"
 			}
 
-			err = os.WriteFile(outPath, data, 0o644)
+			err = os.WriteFile(outPath, data, 0o644) //nolint:gosec // generated source files are world-readable
 			if err != nil {
-				return err
+				return fmt.Errorf("failed to write %s: %w", outPath, err)
 			}
 			return nil
 		})
 	}
 	err = g.Wait()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to copy files to %s: %w", out, err)
 	}
 
 	// ensure that the embedded files do not suffer from auto-conversion on windows
-	err = os.WriteFile(filepath.Join(out, ".gitattributes"), []byte("** binary\n"), 0644)
+	attrPath := filepath.Join(out, ".gitattributes")
+	err = os.WriteFile(attrPath, []byte("** binary\n"), 0o644) //nolint:gosec // generated source files are world-readable
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to write %s: %w", attrPath, err)
 	}
 
 	return nil
+}
+
+// writeHashField adds a length-prefixed field to the hash, so that concatenated fields can't collide.
+func writeHashField(hash io.Writer, data []byte) {
+	_ = binary.Write(hash, binary.LittleEndian, uint64(len(data)))
+	_, _ = hash.Write(data)
 }
 
 func calcContentHash(dir string, fl *fileList) (string, error) {
@@ -155,32 +173,32 @@ func calcContentHash(dir string, fl *fileList) (string, error) {
 		path := filepath.Join(dir, fle.Name)
 		st, err := os.Lstat(path)
 		if err != nil {
-			return "", err
+			return "", fmt.Errorf("failed to stat %s: %w", path, err)
 		}
-		if st.Mode().Type() == os.ModeSymlink {
+		switch {
+		case st.Mode().Type() == os.ModeSymlink:
 			sl, err := os.Readlink(path)
 			if err != nil {
-				return "", err
+				return "", fmt.Errorf("failed to read symlink %s: %w", path, err)
 			}
-			_ = binary.Write(hash, binary.LittleEndian, "symlink")
-			_ = binary.Write(hash, binary.LittleEndian, sl)
-		} else if st.Mode().IsDir() {
+			writeHashField(hash, []byte("symlink"))
+			writeHashField(hash, []byte(sl))
+		case st.Mode().IsDir():
 			err = os.MkdirAll(path, fle.Mode.Perm())
 			if err != nil {
-				return "", err
+				return "", fmt.Errorf("failed to create %s: %w", path, err)
 			}
-			_ = binary.Write(hash, binary.LittleEndian, "dir")
-			_ = binary.Write(hash, binary.LittleEndian, fle.Name)
-		} else if st.Mode().IsRegular() {
-			outPath := filepath.Join(dir, fle.Name)
-			data, err := os.ReadFile(outPath)
+			writeHashField(hash, []byte("dir"))
+			writeHashField(hash, []byte(fle.Name))
+		case st.Mode().IsRegular():
+			data, err := os.ReadFile(path) //nolint:gosec // path is built from the file list of the directory being packed
 			if err != nil {
-				return "", err
+				return "", fmt.Errorf("failed to read %s: %w", path, err)
 			}
 
-			_ = binary.Write(hash, binary.LittleEndian, "regular")
-			_ = binary.Write(hash, binary.LittleEndian, fle.Name)
-			_ = binary.Write(hash, binary.LittleEndian, data)
+			writeHashField(hash, []byte("regular"))
+			writeHashField(hash, []byte(fle.Name))
+			writeHashField(hash, data)
 		}
 	}
 	return hex.EncodeToString(hash.Sum(nil)), nil

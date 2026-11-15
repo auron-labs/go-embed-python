@@ -2,10 +2,12 @@ package python
 
 import (
 	"fmt"
+
 	"github.com/kluctl/go-embed-python/embed_util"
 	"github.com/kluctl/go-embed-python/python/internal/data"
 )
 
+// EmbeddedPython is a Python backed by an interpreter extracted from the embedded distribution.
 type EmbeddedPython struct {
 	e *embed_util.EmbeddedFiles
 	Python
@@ -15,9 +17,9 @@ type EmbeddedPython struct {
 // extracted on demand using the given name as the base for the temporary directory. You should ensure that the chosen
 // name does collide with other consumers of this library.
 func NewEmbeddedPython(name string) (*EmbeddedPython, error) {
-	e, err := embed_util.NewEmbeddedFiles(data.Data, fmt.Sprintf("python-%s", name))
+	e, err := embed_util.NewEmbeddedFiles(data.Data, "python-"+name)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to extract python: %w", err)
 	}
 	return &EmbeddedPython{
 		e:      e,
@@ -25,10 +27,12 @@ func NewEmbeddedPython(name string) (*EmbeddedPython, error) {
 	}, nil
 }
 
+// NewEmbeddedPythonWithTmpDir is like NewEmbeddedPython but extracts to tmpDir, suffixed with the content hash
+// if withHashInDir is set.
 func NewEmbeddedPythonWithTmpDir(tmpDir string, withHashInDir bool) (*EmbeddedPython, error) {
 	e, err := embed_util.NewEmbeddedFilesWithTmpDir(data.Data, tmpDir, withHashInDir)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to extract python to %s: %w", tmpDir, err)
 	}
 	return &EmbeddedPython{
 		e:      e,
@@ -36,10 +40,16 @@ func NewEmbeddedPythonWithTmpDir(tmpDir string, withHashInDir bool) (*EmbeddedPy
 	}, nil
 }
 
+// Cleanup removes the extracted files unless other users still hold them.
 func (ep *EmbeddedPython) Cleanup() error {
-	return ep.e.Cleanup()
+	err := ep.e.Cleanup()
+	if err != nil {
+		return fmt.Errorf("failed to clean up python: %w", err)
+	}
+	return nil
 }
 
+// GetExtractedPath returns the directory the python distribution was extracted to.
 func (ep *EmbeddedPython) GetExtractedPath() string {
 	return ep.e.GetExtractedPath()
 }

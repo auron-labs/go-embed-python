@@ -1,22 +1,26 @@
+// Package embed_util extracts embedded, optionally zstd-compressed file trees to a temporary directory
+// and provides helpers to pack directories for embedding.
 package embed_util
 
 import (
 	"fmt"
-	"github.com/gofrs/flock"
-	"github.com/klauspost/compress/zstd"
-	log "github.com/sirupsen/logrus"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/gofrs/flock"
+	"github.com/klauspost/compress/zstd"
+	log "github.com/sirupsen/logrus"
 )
 
 var staleHashRegex = regexp.MustCompile("^[0-9a-f]{16}$")
 
 const extractedMarker = ".extracted"
 
+// EmbeddedFiles is a set of embedded files extracted to disk. It keeps the extraction in use until Cleanup is called.
 type EmbeddedFiles struct {
 	tmpDir        string
 	extractedPath string
@@ -24,11 +28,14 @@ type EmbeddedFiles struct {
 	lock *flock.Flock
 }
 
+// NewEmbeddedFiles extracts embedFs into a content-hashed directory below the OS temp dir, named after name.
 func NewEmbeddedFiles(embedFs fs.FS, name string) (*EmbeddedFiles, error) {
-	tmpDir := filepath.Join(os.TempDir(), fmt.Sprintf("go-embedded-%s", name))
+	tmpDir := filepath.Join(os.TempDir(), "go-embedded-"+name)
 	return NewEmbeddedFilesWithTmpDir(embedFs, tmpDir, true)
 }
 
+// NewEmbeddedFilesWithTmpDir extracts embedFs to tmpDir, suffixed with the content hash if withHashInDir is set.
+// Extraction is skipped if a complete extraction of the same content already exists.
 func NewEmbeddedFilesWithTmpDir(embedFs fs.FS, tmpDir string, withHashInDir bool) (*EmbeddedFiles, error) {
 	e := &EmbeddedFiles{
 		tmpDir: tmpDir,
@@ -52,20 +59,25 @@ func (e *EmbeddedFiles) Cleanup() error {
 
 	err := lock.Unlock()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to release lock for %s: %w", extractedPath, err)
 	}
 	locked, err := lock.TryLock()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to lock %s for removal: %w", extractedPath, err)
 	}
 	if !locked {
 		return nil
 	}
-	defer lock.Close()
+	defer func() { _ = lock.Close() }()
 
-	return os.RemoveAll(extractedPath)
+	err = os.RemoveAll(extractedPath)
+	if err != nil {
+		return fmt.Errorf("failed to remove %s: %w", extractedPath, err)
+	}
+	return nil
 }
 
+// GetExtractedPath returns the directory the files were extracted to. It is empty after Cleanup.
 func (e *EmbeddedFiles) GetExtractedPath() string {
 	return e.extractedPath
 }
@@ -83,9 +95,10 @@ func (e *EmbeddedFiles) extract(embedFs fs.FS, withHashInDir bool) error {
 	} else {
 		e.extractedPath = e.tmpDir
 	}
-	err = os.MkdirAll(filepath.Dir(e.extractedPath), 0o755)
+	// extracted python files must be readable and traversable by other users
+	err = os.MkdirAll(filepath.Dir(e.extractedPath), 0o755) //nolint:gosec // extracted files must stay world-readable
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create %s: %w", filepath.Dir(e.extractedPath), err)
 	}
 
 	lock := flock.New(e.extractedPath + ".lock")
@@ -94,7 +107,7 @@ func (e *EmbeddedFiles) extract(embedFs fs.FS, withHashInDir bool) error {
 	// would needlessly wait for every other user of the same extraction.
 	err = lock.RLock()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to acquire shared lock for %s: %w", e.extractedPath, err)
 	}
 	if e.isExtracted(flHash) {
 		e.lock = lock
@@ -102,12 +115,12 @@ func (e *EmbeddedFiles) extract(embedFs fs.FS, withHashInDir bool) error {
 	}
 	err = lock.Unlock()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to release shared lock for %s: %w", e.extractedPath, err)
 	}
 
 	err = lock.Lock()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to acquire exclusive lock for %s: %w", e.extractedPath, err)
 	}
 
 	err = e.extractLocked(embedFs, fl, flHash)
@@ -120,11 +133,11 @@ func (e *EmbeddedFiles) extract(embedFs fs.FS, withHashInDir bool) error {
 	// different content blocks until all users are gone, as replacing files would break running interpreters.
 	err = lock.Unlock()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to release exclusive lock for %s: %w", e.extractedPath, err)
 	}
 	err = lock.RLock()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to acquire shared lock for %s: %w", e.extractedPath, err)
 	}
 	e.lock = lock
 	return e.afterExtract(withHashInDir)
@@ -190,11 +203,11 @@ func (e *EmbeddedFiles) extractLocked(embedFs fs.FS, fl *fileList, flHash string
 	// and no longer existing files can't survive from earlier extractions.
 	err := os.RemoveAll(e.extractedPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to remove %s: %w", e.extractedPath, err)
 	}
-	err = os.MkdirAll(e.extractedPath, 0o755)
+	err = os.MkdirAll(e.extractedPath, 0o755) //nolint:gosec // extracted files must stay world-readable
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create %s: %w", e.extractedPath, err)
 	}
 
 	err = e.copyEmbeddedFilesToTmp(embedFs, fl)
@@ -203,7 +216,12 @@ func (e *EmbeddedFiles) extractLocked(embedFs fs.FS, fl *fileList, flHash string
 	}
 
 	// written last, so its presence means that the extraction completed
-	return os.WriteFile(filepath.Join(e.extractedPath, extractedMarker), []byte(flHash), 0o644)
+	markerPath := filepath.Join(e.extractedPath, extractedMarker)
+	err = os.WriteFile(markerPath, []byte(flHash), 0o644) //nolint:gosec // extracted files must stay world-readable
+	if err != nil {
+		return fmt.Errorf("failed to write %s: %w", markerPath, err)
+	}
+	return nil
 }
 
 func (e *EmbeddedFiles) readOrBuildFileList(embedFs fs.FS) (*fileList, error) {
@@ -212,7 +230,7 @@ func (e *EmbeddedFiles) readOrBuildFileList(embedFs fs.FS) (*fileList, error) {
 		if os.IsNotExist(err) {
 			return buildFileListFromFs(embedFs)
 		}
-		return nil, err
+		return nil, fmt.Errorf("failed to read files.json: %w", err)
 	}
 
 	fl, err := readFileList(string(flStr))
@@ -231,7 +249,7 @@ func (e *EmbeddedFiles) copyEmbeddedFilesToTmp(embedFs fs.FS, fl *fileList) erro
 
 	dec, err := zstd.NewReader(nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create zstd decoder: %w", err)
 	}
 	defer dec.Close()
 
@@ -257,7 +275,7 @@ func (e *EmbeddedFiles) copyEmbeddedFilesToTmp(embedFs fs.FS, fl *fileList) erro
 		if fle.Mode.IsDir() {
 			err := os.MkdirAll(path, resolvedFle.Mode.Perm())
 			if err != nil {
-				return err
+				return fmt.Errorf("failed to create %s: %w", path, err)
 			}
 			continue
 		} else if !resolvedFle.Mode.IsRegular() {
@@ -280,27 +298,31 @@ func (e *EmbeddedFiles) writeFile(embedFs fs.FS, dec *zstd.Decoder, fle fileList
 	}
 	src, err := embedFs.Open(name)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to open embedded file %s: %w", name, err)
 	}
-	defer src.Close()
+	defer func() { _ = src.Close() }()
 
 	var r io.Reader = src
 	if fle.Compressed {
 		err = dec.Reset(src)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to decompress %s: %w", name, err)
 		}
 		r = dec
 	}
 
-	dst, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, fle.Mode.Perm())
+	dst, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, fle.Mode.Perm()) //nolint:gosec // path is built from the trusted file list
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create %s: %w", path, err)
 	}
 	_, err = io.Copy(dst, r)
 	if err != nil {
 		_ = dst.Close()
-		return err
+		return fmt.Errorf("failed to write %s: %w", path, err)
 	}
-	return dst.Close()
+	err = dst.Close()
+	if err != nil {
+		return fmt.Errorf("failed to close %s: %w", path, err)
+	}
+	return nil
 }

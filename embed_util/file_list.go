@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -28,9 +29,9 @@ func readFileList(fileListStr string) (*fileList, error) {
 	var fl fileList
 	err := json.Unmarshal([]byte(fileListStr), &fl)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to parse file list: %w", err)
 	}
-	return &fl, err
+	return &fl, nil
 }
 
 func buildFileListFromDir(dir string) (*fileList, error) {
@@ -42,7 +43,7 @@ func buildFileListFromDir(dir string) (*fileList, error) {
 		}
 		relPath, err := filepath.Rel(dir, path)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to relativize %s: %w", path, err)
 		}
 
 		if relPath == "." || relPath == "files.json" {
@@ -55,16 +56,17 @@ func buildFileListFromDir(dir string) (*fileList, error) {
 			Mode: info.Mode(),
 		}
 
-		if info.Mode().Type() == fs.ModeSymlink {
+		switch {
+		case info.Mode().Type() == fs.ModeSymlink:
 			sl, err := os.Readlink(path)
 			if err != nil {
-				return err
+				return fmt.Errorf("failed to read symlink %s: %w", path, err)
 			}
 			fle.Symlink = sl
 			fle.Mode &= ^fs.ModePerm
-		} else if info.Mode().IsDir() {
+		case info.Mode().IsDir():
 			fle.Size = 0
-		} else if info.Mode().IsRegular() {
+		case info.Mode().IsRegular():
 			fle.Compressed = true
 		}
 
@@ -72,7 +74,7 @@ func buildFileListFromDir(dir string) (*fileList, error) {
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to walk %s: %w", dir, err)
 	}
 	sort.Slice(fl.Files, func(i, j int) bool {
 		return fl.Files[i].Name < fl.Files[j].Name
@@ -93,7 +95,7 @@ func buildFileListFromFs(embedFs fs.FS) (*fileList, error) {
 
 		info, err := d.Info()
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to stat %s: %w", path, err)
 		}
 
 		fle := fileListEntry{
@@ -102,9 +104,10 @@ func buildFileListFromFs(embedFs fs.FS) (*fileList, error) {
 			Mode: info.Mode() | 0o600,
 		}
 
-		if info.Mode().Type() == fs.ModeSymlink {
-			return fmt.Errorf("symlink not supported in buildFileListFromFs")
-		} else if info.Mode().IsDir() {
+		switch {
+		case info.Mode().Type() == fs.ModeSymlink:
+			return errors.New("symlink not supported in buildFileListFromFs")
+		case info.Mode().IsDir():
 			fle.Size = 0
 		}
 
@@ -112,20 +115,12 @@ func buildFileListFromFs(embedFs fs.FS) (*fileList, error) {
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to walk embedded files: %w", err)
 	}
 	sort.Slice(fl.Files, func(i, j int) bool {
 		return fl.Files[i].Name < fl.Files[j].Name
 	})
 	return &fl, nil
-}
-
-func (fl *fileList) toMap() map[string]fileListEntry {
-	m := make(map[string]fileListEntry)
-	for _, e := range fl.Files {
-		m[e.Name] = e
-	}
-	return m
 }
 
 func (fl *fileList) Hash() string {

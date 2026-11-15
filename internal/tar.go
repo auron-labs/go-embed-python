@@ -2,6 +2,7 @@ package internal
 
 import (
 	"archive/tar"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -9,11 +10,13 @@ import (
 	"strings"
 )
 
+// ExtractTarStream extracts the directories, regular files and symlinks of a tar stream into targetPath,
+// overwriting existing files. Entries with names that could escape targetPath are rejected.
 func ExtractTarStream(r io.Reader, targetPath string) error {
 	tarReader := tar.NewReader(r)
-	for true {
+	for {
 		header, err := tarReader.Next()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 
@@ -28,23 +31,24 @@ func ExtractTarStream(r io.Reader, targetPath string) error {
 		p := filepath.FromSlash(header.Name)
 		p = filepath.Join(targetPath, p)
 
-		err = os.MkdirAll(filepath.Dir(p), 0755)
+		err = os.MkdirAll(filepath.Dir(p), 0o755) //nolint:gosec // extracted files must stay world-readable
 		if err != nil {
-			return err
+			return fmt.Errorf("ExtractTarStream: MkdirAll() failed: %w", err)
 		}
 
 		switch header.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(p, 0755); err != nil {
+			err = os.MkdirAll(p, 0o755) //nolint:gosec // extracted files must stay world-readable
+			if err != nil {
 				return fmt.Errorf("ExtractTarStream: Mkdir() failed: %w", err)
 			}
 		case tar.TypeReg:
-			_ = os.Remove(p) // we allow overwriting, which easily happens on case insensitive filesystems
-			outFile, err := os.Create(p)
+			_ = os.Remove(p)             // we allow overwriting, which easily happens on case insensitive filesystems
+			outFile, err := os.Create(p) //nolint:gosec // names are validated by validRelPath
 			if err != nil {
 				return fmt.Errorf("ExtractTarStream: Create() failed: %w", err)
 			}
-			_, err = io.Copy(outFile, tarReader)
+			_, err = io.Copy(outFile, tarReader) //nolint:gosec // archive is a trusted python-build-standalone release
 			_ = outFile.Close()
 			if err != nil {
 				return fmt.Errorf("ExtractTarStream: Copy() failed: %w", err)
@@ -55,7 +59,7 @@ func ExtractTarStream(r io.Reader, targetPath string) error {
 			}
 			err = os.Chtimes(p, header.AccessTime, header.ModTime)
 			if err != nil {
-				return err
+				return fmt.Errorf("ExtractTarStream: Chtimes() failed: %w", err)
 			}
 		case tar.TypeSymlink:
 			_ = os.Remove(p) // we allow overwriting, which easily happens on case insensitive filesystems

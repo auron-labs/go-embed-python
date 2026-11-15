@@ -1,3 +1,4 @@
+// Command example demonstrates running an embedded python.
 package main
 
 import (

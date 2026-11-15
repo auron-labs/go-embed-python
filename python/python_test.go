@@ -2,10 +2,12 @@ package python
 
 import (
 	"bytes"
-	"github.com/kluctl/go-embed-python/internal"
-	"github.com/stretchr/testify/assert"
 	"io"
 	"testing"
+
+	"github.com/kluctl/go-embed-python/internal"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestExternalPython(t *testing.T) {
@@ -16,17 +18,17 @@ func TestExternalPython(t *testing.T) {
 
 	cmd, _ := ep.PythonCmd("-c", "print('test test')")
 	stdout, err := cmd.StdoutPipe()
-	assert.NoError(t, err)
-	defer stdout.Close()
+	require.NoError(t, err)
+	defer func() { _ = stdout.Close() }()
 
 	err = cmd.Start()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	stdoutStr, err := io.ReadAll(stdout)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	err = cmd.Wait()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	stdoutStr = bytes.TrimSpace(stdoutStr)
 	assert.Equal(t, "test test", string(stdoutStr))
