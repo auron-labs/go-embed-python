@@ -8,6 +8,9 @@ on:
     branches:
       - 'main'
 
+permissions:
+  contents: read
+
 env:
   PYTHON_STANDALONE_VERSIONS: |
     [
@@ -41,41 +44,48 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Setup QEMU
-        uses: docker/setup-qemu-action@v4
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
       - name: clone
         run: |
           # can't use actions/checkout here as transferring the shallow clone fails when using upload-/download-artifact
           git clone https://github.com/$GITHUB_REPOSITORY . --depth=1
       - name: checkout PR
         if: ${{ github.event_name == 'pull_request' }}
+        env:
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          echo fetching pull/${{ github.ref_name }}
-          git fetch origin pull/${{ github.ref_name }}:pr --depth=1
+          echo "fetching pull/$REF_NAME"
+          git fetch origin "pull/$REF_NAME:pr" --depth=1
           git checkout pr
       - name: checkout branch
         if: ${{ github.event_name == 'push' }}
+        env:
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          echo fetching ${{ github.ref_name }}
-          git fetch origin ${{ github.ref_name }} --depth=1
-          git checkout ${{ github.ref_name }}
+          echo "fetching $REF_NAME"
+          git fetch origin "$REF_NAME" --depth=1
+          git checkout "$REF_NAME"
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
       - name: build-tag
+        env:
+          PYTHON_STANDALONE_VERSION: ${{ matrix.pythonStandaloneVersion }}
+          PYTHON_VERSION: ${{ matrix.pythonVersion }}
         run: |
           git config --global user.email "no@mail.exists"
           git config --global user.name "go-embed-python releaser"
-          BUILD_NUM=$(./hack/next-build-num.sh ${{ matrix.pythonStandaloneVersion }} ${{ matrix.pythonVersion }})
-          ./hack/build-tag.sh ${{ matrix.pythonStandaloneVersion }} ${{ matrix.pythonVersion }} $BUILD_NUM
-          echo $BUILD_NUM > build-num
+          BUILD_NUM=$(./hack/next-build-num.sh "$PYTHON_STANDALONE_VERSION" "$PYTHON_VERSION")
+          ./hack/build-tag.sh "$PYTHON_STANDALONE_VERSION" "$PYTHON_VERSION" "$BUILD_NUM"
+          echo "$BUILD_NUM" > build-num
       - name: git gc
         run: |
           git gc
       - name: rename .git
         run: |
           mv .git git-dir
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: workdir-${{ matrix.pythonStandaloneVersion }} ${{ matrix.pythonVersion }}
           path: |
@@ -97,7 +107,7 @@ jobs:
       fail-fast: false
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: workdir-${{ matrix.pythonStandaloneVersion }} ${{ matrix.pythonVersion }}
       - name: rename .git back
@@ -105,11 +115,14 @@ jobs:
           mv git-dir .git
       - name: checkout tag
         shell: bash
+        env:
+          PYTHON_STANDALONE_VERSION: ${{ matrix.pythonStandaloneVersion }}
+          PYTHON_VERSION: ${{ matrix.pythonVersion }}
         run: |
           git reset --hard
-          git checkout v0.0.0-${{ matrix.pythonVersion }}-${{ matrix.pythonStandaloneVersion }}-$(cat build-num)
+          git checkout "v0.0.0-$PYTHON_VERSION-$PYTHON_STANDALONE_VERSION-$(cat build-num)"
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
       - name: run tests
@@ -132,7 +145,7 @@ jobs:
       contents: write
       actions: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: workdir-${{ matrix.pythonStandaloneVersion }} ${{ matrix.pythonVersion }}
       - name: rename .git back
@@ -144,5 +157,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: push tag
+        env:
+          PYTHON_STANDALONE_VERSION: ${{ matrix.pythonStandaloneVersion }}
+          PYTHON_VERSION: ${{ matrix.pythonVersion }}
         run: |
-          git push origin v0.0.0-${{ matrix.pythonVersion }}-${{ matrix.pythonStandaloneVersion }}-$(cat build-num)
+          git push origin "v0.0.0-$PYTHON_VERSION-$PYTHON_STANDALONE_VERSION-$(cat build-num)"
