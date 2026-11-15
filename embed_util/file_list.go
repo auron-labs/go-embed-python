@@ -51,7 +51,8 @@ func buildFileListFromDir(dir string) (*fileList, error) {
 		}
 
 		fle := fileListEntry{
-			Name: relPath,
+			// fs.FS paths always use forward slashes
+			Name: filepath.ToSlash(relPath),
 			Size: info.Size(),
 			Mode: info.Mode(),
 		}
@@ -62,7 +63,7 @@ func buildFileListFromDir(dir string) (*fileList, error) {
 			if err != nil {
 				return fmt.Errorf("failed to read symlink %s: %w", path, err)
 			}
-			fle.Symlink = sl
+			fle.Symlink = filepath.ToSlash(sl)
 			fle.Mode &= ^fs.ModePerm
 		case info.Mode().IsDir():
 			fle.Size = 0

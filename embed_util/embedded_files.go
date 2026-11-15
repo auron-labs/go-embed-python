@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -256,10 +257,10 @@ func (e *EmbeddedFiles) copyEmbeddedFilesToTmp(embedFs fs.FS, fl *fileList) erro
 	for _, fle := range fl.Files {
 		resolvedFle := fle
 		for resolvedFle.Mode.Type() == fs.ModeSymlink {
-			if filepath.IsAbs(resolvedFle.Symlink) {
+			if path.IsAbs(resolvedFle.Symlink) || filepath.IsAbs(resolvedFle.Symlink) {
 				return fmt.Errorf("abs path not allowed: %s", resolvedFle.Symlink)
 			}
-			sl := filepath.Clean(filepath.Join(filepath.Dir(resolvedFle.Name), resolvedFle.Symlink))
+			sl := path.Join(path.Dir(resolvedFle.Name), resolvedFle.Symlink)
 			fle2, ok := m[sl]
 			if !ok {
 				return fmt.Errorf("symlink %s at %s could not be resolved", resolvedFle.Symlink, resolvedFle.Name)
@@ -270,19 +271,19 @@ func (e *EmbeddedFiles) copyEmbeddedFilesToTmp(embedFs fs.FS, fl *fileList) erro
 			}
 		}
 
-		path := filepath.Join(e.extractedPath, fle.Name)
+		dst := filepath.Join(e.extractedPath, filepath.FromSlash(fle.Name))
 
 		if fle.Mode.IsDir() {
-			err := os.MkdirAll(path, resolvedFle.Mode.Perm())
+			err := os.MkdirAll(dst, resolvedFle.Mode.Perm())
 			if err != nil {
-				return fmt.Errorf("failed to create %s: %w", path, err)
+				return fmt.Errorf("failed to create %s: %w", dst, err)
 			}
 			continue
 		} else if !resolvedFle.Mode.IsRegular() {
 			continue
 		}
 
-		err = e.writeFile(embedFs, dec, resolvedFle, path)
+		err = e.writeFile(embedFs, dec, resolvedFle, dst)
 		if err != nil {
 			return err
 		}
