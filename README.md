@@ -61,9 +61,9 @@ func main() {
 }
 ```
 
-`NewEmbeddedPython(name)` extracts the distribution to `<os.TempDir()>/go-embedded-python-<name>-<hash>`. Choose a `name` that won't collide with other applications using this library. `PythonCmd` returns an `*exec.Cmd` with `PYTHONHOME` (and `PYTHONPATH`, if set via `AddPythonPath`) configured.
+`NewEmbeddedPython(name)` extracts the distribution to `<user cache dir>/go-embed-python/python-<name>-<hash>`, for example `~/.cache/go-embed-python/...` on Linux and `~/Library/Caches/go-embed-python/...` on macOS. Without a user cache dir, it uses a per-user directory in the OS temp dir. The directory must be owned by the current user and is refused otherwise. Choose a `name` that won't collide with other applications using this library. `PythonCmd` returns an `*exec.Cmd` with `PYTHONHOME` (and `PYTHONPATH`, if set via `AddPythonPath`) configured.
 
-To control the extraction directory, use `python.NewEmbeddedPythonWithTmpDir(dir, withHashInDir)`. With `withHashInDir` set to `false`, the same directory is reused across versions. A process that needs a different version waits until every process using the current extraction has exited.
+To control the extraction directory, use `python.NewEmbeddedPythonWithTmpDir(dir, withHashInDir)`. Choose a directory other users cannot write to: extraction paths are predictable, so a shared directory such as `/tmp` lets another user supply the files that get executed. With `withHashInDir` set to `false`, the same directory is reused across versions. A process that needs a different version waits until every process using the current extraction has exited.
 
 `Cleanup()` removes the extracted files unless another process or instance is still using them.
 

@@ -177,3 +177,36 @@ func TestStaleExtractionsAreRemoved(t *testing.T) {
 	assert.DirExists(t, inUse.GetExtractedPath())
 	assert.DirExists(t, current.GetExtractedPath())
 }
+
+func setUserCacheDir(t *testing.T) string {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	t.Setenv("LocalAppData", filepath.Join(home, "AppData"))
+	cache, err := os.UserCacheDir()
+	require.NoError(t, err)
+	return cache
+}
+
+func TestDefaultLocationIsUserCacheDir(t *testing.T) {
+	cache := setUserCacheDir(t)
+
+	e, err := embed_util.NewEmbeddedFiles(os.DirFS(embedDir(t, baseFiles(), false)), "app")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = e.Cleanup() })
+
+	assert.Equal(t, filepath.Join(cache, "go-embed-python"), filepath.Dir(e.GetExtractedPath()))
+	assert.Equal(t, "top level text\n", readFile(t, filepath.Join(e.GetExtractedPath(), "top.txt")))
+}
+
+func TestDefaultLocationRejectsSymlinkedBaseDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("ownership is not checked on windows")
+	}
+	cache := setUserCacheDir(t)
+	require.NoError(t, os.MkdirAll(cache, 0o755))
+	require.NoError(t, os.Symlink(t.TempDir(), filepath.Join(cache, "go-embed-python")))
+
+	_, err := embed_util.NewEmbeddedFiles(os.DirFS(embedDir(t, baseFiles(), false)), "app")
+	require.ErrorContains(t, err, "not a directory owned by the current user")
+}

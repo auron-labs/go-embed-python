@@ -29,10 +29,32 @@ type EmbeddedFiles struct {
 	lock *flock.Flock
 }
 
-// NewEmbeddedFiles extracts embedFs into a content-hashed directory below the OS temp dir, named after name.
+// NewEmbeddedFiles extracts embedFs into a content-hashed directory, named after name, below a directory that only the
+// current user can write to: the user cache dir, or a per-user directory in the OS temp dir if there is none.
 func NewEmbeddedFiles(embedFs fs.FS, name string) (*EmbeddedFiles, error) {
-	tmpDir := filepath.Join(os.TempDir(), "go-embedded-"+name)
-	return NewEmbeddedFilesWithTmpDir(embedFs, tmpDir, true)
+	base, err := defaultBaseDir()
+	if err != nil {
+		return nil, err
+	}
+	return NewEmbeddedFilesWithTmpDir(embedFs, filepath.Join(base, name), true)
+}
+
+// defaultBaseDir returns the parent directory for default extractions. The extraction paths are predictable, so in a
+// directory writable by others, such as /tmp, another local user could create one first and supply the executed files.
+func defaultBaseDir() (string, error) {
+	base := filepath.Join(os.TempDir(), fmt.Sprintf("go-embed-python-%d", os.Getuid()))
+	if cache, err := os.UserCacheDir(); err == nil {
+		base = filepath.Join(cache, "go-embed-python")
+	}
+	err := os.MkdirAll(base, 0o755) //nolint:gosec // extracted files must stay world-readable
+	if err != nil {
+		return "", fmt.Errorf("failed to create %s: %w", base, err)
+	}
+	err = ensurePrivateDir(base)
+	if err != nil {
+		return "", err
+	}
+	return base, nil
 }
 
 // NewEmbeddedFilesWithTmpDir extracts embedFs to tmpDir, suffixed with the content hash if withHashInDir is set.
