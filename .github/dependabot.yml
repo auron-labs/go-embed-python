@@ -1,25 +1,20 @@
 version: 2
 
+multi-ecosystem-groups:
+  dependencies:
+    schedule:
+      interval: weekly
+
 updates:
   - package-ecosystem: "github-actions"
     directory: "/"
-    schedule:
-      interval: "weekly"
+    multi-ecosystem-group: dependencies
+    patterns: ["*"]
     cooldown:
       default-days: 7
-    groups:
-      github-actions:
-        update-types:
-          - minor
-          - patch
   - package-ecosystem: "gomod"
     directory: "/"
-    schedule:
-      interval: "weekly"
+    multi-ecosystem-group: dependencies
+    patterns: ["*"]
     cooldown:
       default-days: 7
-    groups:
-      gomod:
-        update-types:
-          - minor
-          - patch
